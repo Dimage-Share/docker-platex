@@ -5,10 +5,10 @@ services:
     container_name: platex-samba
     environment:
       - SMB_PASSWORD=smbpass
-    # Port publishing removed because many Windows hosts already use port 445/139.
-    # If you run this on a Linux host or a VM where ports are free, you can add:
-    #   - "139:139"
-    #   - "445:445"
+    ports:
+      # Use high-numbered host ports to avoid Windows local SMB service conflicts
+      - "1139:139"
+      - "1445:445"
     volumes:
       - ./share:/srv/samba/share
       - ./volume:/usr/local/texlive

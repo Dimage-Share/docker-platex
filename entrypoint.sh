@@ -1,5 +1,7 @@
 #!/bin/bash
-set -e
+set -euo pipefail
+
+log(){ echo "[entrypoint] $*"; }
 
 # Environment variables:
 # SMB_PASSWORD - password for smbuser (default: smbpass)
@@ -8,20 +10,17 @@ SMB_PASS=${SMB_PASSWORD:-smbpass}
 
 # Ensure /srv/samba/share exists and ownership
 mkdir -p /srv/samba/share
-# Use samba group if exists; fallback to root:root to avoid chown error
-if getent group samba >/dev/null 2>&1; then
-  chown root:samba /srv/samba/share || true
-else
-  chown root:root /srv/samba/share || true
-fi
-chmod 0775 /srv/samba/share
+# Defer ownership change until after smbuser creation (we create user shortly below)
 
 # Create system user for smb access
 if ! id -u smbuser >/dev/null 2>&1; then
   useradd -M -s /sbin/nologin smbuser || true
 fi
+chown smbuser:smbuser /srv/samba/share || true
+chmod 0775 /srv/samba/share
 echo -e "$SMB_PASS\n$SMB_PASS" | smbpasswd -s -a smbuser || true
 smbpasswd -e smbuser || true
+log "Configured smbuser"
 
 # Ensure TeX Live minimal install + required packages (platex etc.) exist
 TEXROOT=/usr/local/texlive
@@ -35,7 +34,7 @@ if [ ! -x /usr/local/texlive/bin/x86_64-linux/platex ]; then
 fi
 
 if [ "$NEED_INSTALL" -gt 0 ]; then
-  echo "TeX Live setup required (mode=$NEED_INSTALL). This may take several minutes..."
+  log "TeX Live setup required (mode=$NEED_INSTALL). This may take several minutes..."
   if [ "$NEED_INSTALL" -eq 1 ]; then
     mkdir -p "$TEXROOT" && cd /tmp && \
     wget -q http://mirror.ctan.org/systems/texlive/tlnet/install-tl-unx.tar.gz && \
@@ -56,6 +55,7 @@ if [ "$NEED_INSTALL" -gt 0 ]; then
   for b in /usr/local/texlive/*/bin/*; do PATH="$b:$PATH"; break; done
   tlmgr update --self || true
   tlmgr install platex uplatex ptex uptex collection-langjapanese dvipdfmx latex-extra latexmk || true
+  log "TeX Live toolchain ensured"
 fi
 
 # Ensure locale exists (suppress perl locale warnings)
@@ -69,6 +69,20 @@ export LC_ALL=ja_JP.UTF-8
 for b in /usr/local/texlive/*/bin/*; do PATH="$b:$PATH"; break; done
 export PATH
 
-# Start nmbd and smbd in foreground
-nmbd --foreground --no-process-group &
-smbd --foreground --no-process-group
+# Samba startup (prefer 'samba -i', fallback to smbd)
+log "Starting Samba services"
+if command -v nmbd >/dev/null 2>&1; then
+  nmbd -F &
+else
+  log "nmbd not found; NetBIOS name service disabled"
+fi
+
+if command -v samba >/dev/null 2>&1; then
+  exec samba -i -s /etc/samba/smb.conf
+elif command -v smbd >/dev/null 2>&1; then
+  exec smbd -F -S -s /etc/samba/smb.conf
+else
+  log "ERROR: Neither samba nor smbd found" >&2
+  sleep 5
+  exit 1
+fi

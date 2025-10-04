@@ -10,7 +10,8 @@ RUN dnf -y update && \
     dnf -y install epel-release && \
     dnf -y install glibc-langpack-ja glibc-langpack-en \
     samba samba-client samba-common cyrus-sasl cyrus-sasl-plain \
-    python3 python3-pip which make gcc git wget unzip tar && \
+    python3 python3-pip which make gcc git wget unzip tar \
+    procps-ng iproute net-tools findutils && \
     dnf clean all && rm -rf /var/cache/dnf
 
 # Install TeX Live using the upstream installer (non-interactive minimal install + japanese packages)
