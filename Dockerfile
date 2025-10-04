@@ -11,7 +11,7 @@ ENV LANG=ja_JP.UTF-8 \
 RUN dnf -y update && \
     dnf -y install epel-release && \
     dnf -y install glibc-langpack-ja glibc-langpack-en \
-    samba samba-client samba-common cyrus-sasl cyrus-sasl-plain \
+    # (Samba removed) \
     python3 python3-pip which make gcc git wget unzip tar \
     procps-ng iproute net-tools findutils && \
     dnf clean all && rm -rf /var/cache/dnf
@@ -21,20 +21,15 @@ RUN dnf -y update && \
 # 起動時にマウントされたボリューム（例: ./volume -> /usr/local/texlive）へ
 # 必要に応じてインストールする仕組みを `entrypoint.sh` に実装しています。
 
-# Create share directory (samba 共有用)
-RUN mkdir -p /srv/samba/share && chmod 0775 /srv/samba/share
+RUN mkdir -p /workspace && chmod 0775 /workspace
 
-COPY smb.conf /etc/samba/smb.conf
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY compile.sh /usr/local/bin/compile.sh
-COPY sample.tex /srv/samba/share/sample.tex
-COPY sample_script.py /srv/samba/share/sample_script.py
+COPY sample.tex /workspace/sample.tex
+COPY sample_script.py /workspace/sample_script.py
 
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/compile.sh
 
-EXPOSE 139 445
-
-# 永続化: TeX Live (/usr/local/texlive) と Samba 共有ディレクトリ
-VOLUME ["/srv/samba/share", "/usr/local/texlive"]
+VOLUME ["/workspace", "/usr/local/texlive"]
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

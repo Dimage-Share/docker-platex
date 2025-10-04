@@ -212,6 +212,8 @@ volume/
 samba-lib/
 samba-cache/
 samba-log/
+work/
+texlive/
 *.aux
 *.log
 *.dvi

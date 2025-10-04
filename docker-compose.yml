@@ -1,26 +1,8 @@
-version: '3.8'
 services:
-  platex-samba:
+  platex:
     build: .
-    container_name: platex-samba
-    environment:
-      - SMB_PASSWORD=smbpass
-    ports:
-      # Use high-numbered host ports to avoid Windows local SMB service conflicts
-      - "1139:139"
-      - "1445:445"
+    container_name: platex
     volumes:
-      # User shared working directory (documents / .tex / scripts)
-      - ./share:/srv/samba/share
-      # TeX Live installation tree (large) – keep between container recreations
-      - ./volume:/usr/local/texlive
-      # Samba internal state/cache/log use Docker named volumes (avoid NTFS locking issues)
-      - samba-lib:/var/lib/samba
-      - samba-cache:/var/cache/samba
-      - samba-log:/var/log/samba
+      - ./work:/workspace
+      - ./texlive:/usr/local/texlive
     restart: unless-stopped
-
-volumes:
-  samba-lib:
-  samba-cache:
-  samba-log:

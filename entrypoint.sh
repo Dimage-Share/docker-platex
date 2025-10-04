@@ -4,19 +4,7 @@ set -euo pipefail
 log(){ echo "[entrypoint] $*"; }
 set -x
 
-# Environment variables:
-# SMB_PASSWORD - password for smbuser (default: smbpass)
-
-SMB_PASS=${SMB_PASSWORD:-smbpass}
-
-# Prepare share & local user (Samba passdb later)
-mkdir -p /srv/samba/share
-if ! id -u smbuser >/dev/null 2>&1; then
-  useradd -M -s /sbin/nologin smbuser || true
-fi
-chown smbuser:smbuser /srv/samba/share || true
-chmod 0775 /srv/samba/share
-log "Prepared smbuser and share"
+# (Samba removed) 余計なユーザー / ディレクトリ作成は不要になりました。
 
 # --- TeX Live ensure block (improved) --------------------------------------
 TEXROOT=/usr/local/texlive
@@ -98,33 +86,5 @@ export LC_ALL=ja_JP.UTF-8
 # Ensure texlive bin is on PATH (final)
 add_tex_path
 
-### Samba startup (single-pass) ###
-log "Initializing Samba"
-mkdir -p /var/log/samba /var/lib/samba/private /var/cache/samba /run/samba
-chmod 755 /var/log/samba
-chmod 750 /var/lib/samba/private || true
-chown root:root /var/log/samba /var/lib/samba /var/lib/samba/private /var/cache/samba /run/samba || true
-
-command -v smbd || log "smbd not in PATH?"
-
-# Seed secrets.tdb if missing
-if [ ! -s /var/lib/samba/private/secrets.tdb ]; then
-  smbd -D -s /etc/samba/smb.conf || true
-  sleep 2
-fi
-
-# Add passdb entry if absent
-if ! pdbedit -L 2>/dev/null | grep -q '^smbuser:'; then
-  echo -e "$SMB_PASS\n$SMB_PASS" | smbpasswd -s -a smbuser || log "smbpasswd add failed"
-fi
-smbpasswd -e smbuser || true
-
-pkill smbd 2>/dev/null || true
-sleep 1
-
-if command -v nmbd >/dev/null 2>&1; then
-  nmbd -D || log "nmbd failed (ignored)"
-fi
-
-log "Starting smbd foreground"
-exec smbd -F -s /etc/samba/smb.conf --debuglevel=1
+log "Container ready. Sleeping to keep container alive..."
+while true; do sleep 3600; done
