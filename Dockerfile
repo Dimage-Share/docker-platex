@@ -4,7 +4,9 @@ FROM almalinux:9
 ENV LANG=ja_JP.UTF-8 \
     LC_ALL=ja_JP.UTF-8 \
     LANGUAGE=ja_JP:ja \
-    TEXLIVE_INSTALL_NO_CONTEXT_CACHE=1
+    TEXLIVE_INSTALL_NO_CONTEXT_CACHE=1 \
+    TEXLIVE_BIN=/usr/local/texlive/bin/x86_64-linux \
+    PATH=/usr/local/texlive/bin/x86_64-linux:$PATH
 
 RUN dnf -y update && \
     dnf -y install epel-release && \

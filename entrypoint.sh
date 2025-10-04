@@ -2,6 +2,7 @@
 set -euo pipefail
 
 log(){ echo "[entrypoint] $*"; }
+set -x
 
 # Environment variables:
 # SMB_PASSWORD - password for smbuser (default: smbpass)
@@ -22,41 +23,75 @@ echo -e "$SMB_PASS\n$SMB_PASS" | smbpasswd -s -a smbuser || true
 smbpasswd -e smbuser || true
 log "Configured smbuser"
 
-# Ensure TeX Live minimal install + required packages (platex etc.) exist
+# --- TeX Live ensure block (improved) --------------------------------------
 TEXROOT=/usr/local/texlive
-NEED_INSTALL=0
-if [ ! -x /usr/local/texlive/bin/x86_64-linux/platex ]; then
-  if [ ! -d "$TEXROOT/texmf-dist" ]; then
-    NEED_INSTALL=1
-  else
-    NEED_INSTALL=2 # only missing platex packages
-  fi
-fi
+BIN_DIR="$TEXROOT/bin/x86_64-linux"
+PROFILE_FILE=/tmp/texlive.profile
 
-if [ "$NEED_INSTALL" -gt 0 ]; then
-  log "TeX Live setup required (mode=$NEED_INSTALL). This may take several minutes..."
-  if [ "$NEED_INSTALL" -eq 1 ]; then
-    mkdir -p "$TEXROOT" && cd /tmp && \
-    wget -q http://mirror.ctan.org/systems/texlive/tlnet/install-tl-unx.tar.gz && \
-    tar xzf install-tl-unx.tar.gz && \
-    printf 'selected_scheme scheme-basic\n' > /tmp/profile.local && \
-    printf 'tlpdbopt_install_docfiles 0\n' >> /tmp/profile.local && \
-    printf 'tlpdbopt_install_srcfiles 0\n' >> /tmp/profile.local && \
-    printf 'tlpdbopt_autobackup 0\n' >> /tmp/profile.local && \
-    printf 'option_file_assocs 0\n' >> /tmp/profile.local && \
-    for d in /tmp/install-tl-*; do
-      if [ -d "$d" ]; then
-        (cd "$d" && ./install-tl -profile /tmp/profile.local -repository http://mirror.ctan.org/systems/texlive/tlnet --no-gui --texdir "$TEXROOT") || true
-        break
-      fi
-    done && rm -rf /tmp/install-tl-* /tmp/profile.local
+add_tex_path() {
+  if [ -d "$BIN_DIR" ]; then
+    case :$PATH: in *:$BIN_DIR:*) :;; *) PATH="$BIN_DIR:$PATH";; esac
+    export PATH
   fi
-  # Add bin to PATH and install missing Japanese/platex toolchain
-  for b in /usr/local/texlive/*/bin/*; do PATH="$b:$PATH"; break; done
+}
+
+write_profile() {
+  cat > "$PROFILE_FILE" <<'EOF'
+selected_scheme scheme-basic
+TEXDIR /usr/local/texlive
+TEXMFCONFIG /usr/local/texlive/texmf-config
+TEXMFVAR /usr/local/texlive/texmf-var
+TEXMFHOME /usr/local/texlive/texmf-home
+tlpdbopt_install_docfiles 0
+tlpdbopt_install_srcfiles 0
+tlpdbopt_autobackup 0
+tlpdbopt_post_code 0
+EOF
+}
+
+texlive_install_minimal() {
+  log "(Re)installing TeX Live minimal into $TEXROOT"
+  rm -rf "$TEXROOT" 2>/dev/null || true
+  mkdir -p "$TEXROOT"
+  write_profile
+  cd /tmp
+  wget -q http://mirror.ctan.org/systems/texlive/tlnet/install-tl-unx.tar.gz
+  tar xzf install-tl-unx.tar.gz
+  local SRC
+  SRC=$(find /tmp -maxdepth 1 -type d -name 'install-tl-*' | head -n1)
+  if [ -z "$SRC" ]; then
+    log "ERROR: install-tl directory not found"; return 1
+  fi
+  (cd "$SRC" && ./install-tl -profile "$PROFILE_FILE" --no-gui) || log "install-tl finished with non-zero status"
+  rm -rf "$SRC" install-tl-unx.tar.gz "$PROFILE_FILE"
+  add_tex_path
+}
+
+install_japanese_packages() {
+  add_tex_path
+  if ! command -v tlmgr >/dev/null 2>&1; then
+    log "tlmgr still missing after installation"; return 0
+  fi
   tlmgr update --self || true
-  tlmgr install platex uplatex ptex uptex collection-langjapanese dvipdfmx latex-extra latexmk || true
-  log "TeX Live toolchain ensured"
+  tlmgr install collection-langjapanese platex uplatex ptex uptex dvipdfmx latexmk || true
+  fmtutil-sys --all >/dev/null 2>&1 || fmtutil-sys --byfmt platex || true
+  log "Installed Japanese TeX packages (platex=$(command -v platex || echo missing))"
+}
+
+FORCE=${FORCE_TEXLIVE:-0}
+[ "$FORCE" = "1" ] && log "FORCE_TEXLIVE=1 specified"
+
+if [ "$FORCE" = "1" ] || [ ! -x "$BIN_DIR/platex" ]; then
+  texlive_install_minimal
+  install_japanese_packages
+else
+  add_tex_path
+  if ! command -v platex >/dev/null 2>&1; then
+    install_japanese_packages
+  fi
+  command -v platex >/dev/null 2>&1 && log "TeX Live ready (platex found)" || log "platex still missing"
 fi
+# ---------------------------------------------------------------------------
 
 # Ensure locale exists (suppress perl locale warnings)
 if command -v localedef >/dev/null 2>&1; then
@@ -65,22 +100,55 @@ fi
 export LANG=ja_JP.UTF-8
 export LC_ALL=ja_JP.UTF-8
 
-# Ensure texlive bin is on PATH for session
-for b in /usr/local/texlive/*/bin/*; do PATH="$b:$PATH"; break; done
-export PATH
+# Ensure texlive bin is on PATH (final)
+add_tex_path
 
-# Samba startup (prefer 'samba -i', fallback to smbd)
+########################################
+# Samba startup (robust)                #
+########################################
+log "Preparing Samba"
+mkdir -p /var/log/samba && chmod 755 /var/log/samba
+mkdir -p /var/lib/samba/private /var/cache/samba /run/samba
+chmod 750 /var/lib/samba/private || true
+chown root:root /var/lib/samba /var/lib/samba/private /var/cache/samba /run/samba || true
+
+# Initialize secrets.tdb if missing
+if [ ! -s /var/lib/samba/private/secrets.tdb ]; then
+  log "Initializing secrets.tdb"
+  # smbd --help で確認できるオプション: 一旦最小デーモン起動して自動生成させる
+  (smbd -D -s /etc/samba/smb.conf || true)
+  # 少し待つ
+  sleep 2
+fi
+
+command -v smbd || log "smbd not in PATH?"
+command -v samba || log "samba wrapper not found (ok)"
+
 log "Starting Samba services"
 if command -v nmbd >/dev/null 2>&1; then
-  nmbd -F &
+  nmbd -D || log "nmbd start failed (ignored)"
 else
-  log "nmbd not found; NetBIOS name service disabled"
+  log "nmbd not found; NetBIOS disabled"
 fi
 
 if command -v samba >/dev/null 2>&1; then
-  exec samba -i -s /etc/samba/smb.conf
+  samba -i -s /etc/samba/smb.conf &
+  SAMBA_PID=$!
+  sleep 2
+  if ! kill -0 $SAMBA_PID 2>/dev/null; then
+    log "samba wrapper failed; falling back to smbd -F"
+    smbd -F -s /etc/samba/smb.conf
+  else
+    wait $SAMBA_PID
+  fi
 elif command -v smbd >/dev/null 2>&1; then
-  exec smbd -F -S -s /etc/samba/smb.conf
+  # Ensure user added AFTER secrets.tdb is initialized
+  if ! pdbedit -L | grep -q '^smbuser:'; then
+    echo -e "$SMB_PASS\n$SMB_PASS" | smbpasswd -s -a smbuser || log "Failed to add smbuser"
+  fi
+  smbpasswd -e smbuser || true
+  log "Launching smbd (foreground)"
+  exec smbd -F -s /etc/samba/smb.conf
 else
   log "ERROR: Neither samba nor smbd found" >&2
   sleep 5

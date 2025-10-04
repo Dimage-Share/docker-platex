@@ -10,6 +10,17 @@ services:
       - "1139:139"
       - "1445:445"
     volumes:
+      # User shared working directory (documents / .tex / scripts)
       - ./share:/srv/samba/share
+      # TeX Live installation tree (large) – keep between container recreations
       - ./volume:/usr/local/texlive
+      # Samba internal state/cache/log use Docker named volumes (avoid NTFS locking issues)
+      - samba-lib:/var/lib/samba
+      - samba-cache:/var/cache/samba
+      - samba-log:/var/log/samba
     restart: unless-stopped
+
+volumes:
+  samba-lib:
+  samba-cache:
+  samba-log:
