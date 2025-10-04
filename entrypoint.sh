@@ -9,19 +9,14 @@ set -x
 
 SMB_PASS=${SMB_PASSWORD:-smbpass}
 
-# Ensure /srv/samba/share exists and ownership
+# Prepare share & local user (Samba passdb later)
 mkdir -p /srv/samba/share
-# Defer ownership change until after smbuser creation (we create user shortly below)
-
-# Create system user for smb access
 if ! id -u smbuser >/dev/null 2>&1; then
   useradd -M -s /sbin/nologin smbuser || true
 fi
 chown smbuser:smbuser /srv/samba/share || true
 chmod 0775 /srv/samba/share
-echo -e "$SMB_PASS\n$SMB_PASS" | smbpasswd -s -a smbuser || true
-smbpasswd -e smbuser || true
-log "Configured smbuser"
+log "Prepared smbuser and share"
 
 # --- TeX Live ensure block (improved) --------------------------------------
 TEXROOT=/usr/local/texlive
@@ -103,54 +98,33 @@ export LC_ALL=ja_JP.UTF-8
 # Ensure texlive bin is on PATH (final)
 add_tex_path
 
-########################################
-# Samba startup (robust)                #
-########################################
-log "Preparing Samba"
-mkdir -p /var/log/samba && chmod 755 /var/log/samba
-mkdir -p /var/lib/samba/private /var/cache/samba /run/samba
+### Samba startup (single-pass) ###
+log "Initializing Samba"
+mkdir -p /var/log/samba /var/lib/samba/private /var/cache/samba /run/samba
+chmod 755 /var/log/samba
 chmod 750 /var/lib/samba/private || true
-chown root:root /var/lib/samba /var/lib/samba/private /var/cache/samba /run/samba || true
-
-# Initialize secrets.tdb if missing
-if [ ! -s /var/lib/samba/private/secrets.tdb ]; then
-  log "Initializing secrets.tdb"
-  # smbd --help で確認できるオプション: 一旦最小デーモン起動して自動生成させる
-  (smbd -D -s /etc/samba/smb.conf || true)
-  # 少し待つ
-  sleep 2
-fi
+chown root:root /var/log/samba /var/lib/samba /var/lib/samba/private /var/cache/samba /run/samba || true
 
 command -v smbd || log "smbd not in PATH?"
-command -v samba || log "samba wrapper not found (ok)"
 
-log "Starting Samba services"
-if command -v nmbd >/dev/null 2>&1; then
-  nmbd -D || log "nmbd start failed (ignored)"
-else
-  log "nmbd not found; NetBIOS disabled"
-fi
-
-if command -v samba >/dev/null 2>&1; then
-  samba -i -s /etc/samba/smb.conf &
-  SAMBA_PID=$!
+# Seed secrets.tdb if missing
+if [ ! -s /var/lib/samba/private/secrets.tdb ]; then
+  smbd -D -s /etc/samba/smb.conf || true
   sleep 2
-  if ! kill -0 $SAMBA_PID 2>/dev/null; then
-    log "samba wrapper failed; falling back to smbd -F"
-    smbd -F -s /etc/samba/smb.conf
-  else
-    wait $SAMBA_PID
-  fi
-elif command -v smbd >/dev/null 2>&1; then
-  # Ensure user added AFTER secrets.tdb is initialized
-  if ! pdbedit -L | grep -q '^smbuser:'; then
-    echo -e "$SMB_PASS\n$SMB_PASS" | smbpasswd -s -a smbuser || log "Failed to add smbuser"
-  fi
-  smbpasswd -e smbuser || true
-  log "Launching smbd (foreground)"
-  exec smbd -F -s /etc/samba/smb.conf
-else
-  log "ERROR: Neither samba nor smbd found" >&2
-  sleep 5
-  exit 1
 fi
+
+# Add passdb entry if absent
+if ! pdbedit -L 2>/dev/null | grep -q '^smbuser:'; then
+  echo -e "$SMB_PASS\n$SMB_PASS" | smbpasswd -s -a smbuser || log "smbpasswd add failed"
+fi
+smbpasswd -e smbuser || true
+
+pkill smbd 2>/dev/null || true
+sleep 1
+
+if command -v nmbd >/dev/null 2>&1; then
+  nmbd -D || log "nmbd failed (ignored)"
+fi
+
+log "Starting smbd foreground"
+exec smbd -F -s /etc/samba/smb.conf --debuglevel=1
